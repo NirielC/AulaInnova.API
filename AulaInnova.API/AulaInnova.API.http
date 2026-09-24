@@ -1,0 +1,11 @@
+POST http://localhost:5077/api/Auth/login
+Content-Type: application/json
+
+{
+  "usuario": "admin",
+  "password": "AulaAdmin2026!"
+}
+
+### Obtener usuarios como Administrador
+GET http://localhost:5077/api/admin/users
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyZjYwODMxNS0xNDZmLTQ4ZWItM2RiOC0wOGRmMTc2YThjMDIiLCJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1laWRlbnRpZmllciI6IjJmNjA4MzE1LTE0NmYtNDhlYi0zZGI4LTA4ZGYxNzZhOGMwMiIsImh0dHA6Ly9zY2hlbWFzLnhtbHNvYXAub3JnL3dzLzIwMDUvMDUvaWRlbnRpdHkvY2xhaW1zL25hbWUiOiJhZG1pbiIsImh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd3MvMjAwOC8wNi9pZGVudGl0eS9jbGFpbXMvcm9sZSI6IkFkbWluaXN0cmFkb3IiLCJleHAiOjE3ODk5NjgyMzEsImlzcyI6IkF1bGFJbm5vdmEuQVBJIiwiYXVkIjoiQXVsYUlubm92YS5DbGllbnQifQ.EO2vVr1XY4VpT1Sm9oSGZ7I3rBIB83e09Jr8kroSAWA
