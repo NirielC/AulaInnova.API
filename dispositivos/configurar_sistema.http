@@ -1,0 +1,176 @@
+### =====================================================================
+### AulaInnova · configurar el sistema (en orden)
+### Abrir en Visual Studio 2022 o VS Code (extensión REST Client) y darle
+### "Send Request" a cada bloque. Cambiar los ids según lo que devuelva la API.
+### =====================================================================
+
+@api = http://localhost:5077
+
+### 1. Login como administrador (el token se usa en todo lo demás)
+# @name login
+POST {{api}}/api/Auth/login
+Content-Type: application/json
+
+{ "usuario": "admin", "password": "Admin#2026!" }
+
+###
+@token = {{login.response.body.$.token}}
+
+
+### ---------------------------------------------------------------------
+### 2. Datos base (si la web ya los tiene, saltar)
+### ---------------------------------------------------------------------
+
+### Aula
+POST {{api}}/api/admin/classrooms
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "codigo": "3C", "nombre": "Aula 3C" }
+
+### Grupo
+POST {{api}}/api/admin/groups
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "ciclo": 2026, "grado": "1", "seccion": "A", "desde": "2026-01-15", "hasta": "2026-11-30" }
+
+### Asignatura
+POST {{api}}/api/admin/subjects
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "codigo": "MAT", "nombre": "Matemática" }
+
+### Estudiante (devuelve el id de la persona)
+POST {{api}}/api/admin/people/students
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombres": "Elías Niriel", "apellidos": "López Casoverde", "codigo": "E001" }
+
+### Personal (docente, auxiliar...)
+POST {{api}}/api/admin/people/staff
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombres": "María José", "apellidos": "Pérez", "codigo": "D001" }
+
+### Usuario del docente: el ROL es lo que la estación usa para saber si es
+### Profesor, Auxiliar o Administrador
+POST {{api}}/api/admin/users
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "usuario": "mperez", "email": "mperez@aulainnova.local", "password": "Profe#2026!", "personaId": 2, "rol": "Profesor" }
+
+### Matrícula
+POST {{api}}/api/admin/matriculas
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "estudianteId": 1, "grupoId": 1, "desde": "2026-01-15" }
+
+### Horario semanal (diaSemana: 1 = lunes ... 7 = domingo; horas LOCALES)
+POST {{api}}/api/admin/horarios
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "asignaturaId": 1, "grupoId": 1, "docenteId": 2, "aulaId": 1, "diaSemana": 1,
+  "vigenteDesde": "2026-01-15", "horaInicio": "07:00:00", "horaFin": "07:45:00" }
+
+### Credencial NFC: la referencia tal como la muestra la estación en el
+### Monitor Serie (UUID del sticker o UID). Guiones y minúsculas se aceptan.
+POST {{api}}/api/admin/nfc
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "personaId": 1, "referencia": "53C22C21430001", "desdeUtc": "2026-01-15T00:00:00Z" }
+
+
+### ---------------------------------------------------------------------
+### 3. Jornadas de un periodo + sus clases (salen del horario)
+###    Horas LOCALES. Fechas que ya tienen jornada se saltan.
+### ---------------------------------------------------------------------
+POST {{api}}/api/admin/jornadas/rango
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "desde": "2026-10-13", "hasta": "2026-11-30",
+  "horaInicio": "06:30:00", "horaFin": "17:00:00", "horaLimitePuntual": "07:00:00",
+  "zonaHoraria": "America/El_Salvador", "dias": [1, 2, 3, 4, 5] }
+
+### Si se cambió el horario después: volver a generar las clases de una jornada
+POST {{api}}/api/admin/jornadas/1/asignaciones
+Authorization: Bearer {{token}}
+
+
+### ---------------------------------------------------------------------
+### 4. Estación NFC del aula
+### ---------------------------------------------------------------------
+
+### Crear (anotar el id)
+POST {{api}}/api/admin/estaciones
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "codigoLogico": "EST-3C-01" }
+
+### Configurar: aula y modos (los dos, así se cambia con la tecla D)
+POST {{api}}/api/admin/estaciones/1/configuration
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "tipoPunto": "AULA", "aulaId": 1, "etiquetaPunto": "Puerta 3C", "expiracionSelectorS": 15,
+  "motivoCambio": "Instalación inicial", "permiteAsistencia": true, "permiteMovimientos": true }
+
+### Clave: copiar "secreto" COMPLETO a config.h (ESTACION_CLAVE). Solo se muestra una vez.
+POST {{api}}/api/admin/estaciones/1/secret
+Authorization: Bearer {{token}}
+
+
+### ---------------------------------------------------------------------
+### 5. Cámara del aula (es otra estación, sin modos NFC)
+### ---------------------------------------------------------------------
+POST {{api}}/api/admin/estaciones
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "codigoLogico": "CAM-3C-01" }
+
+### La configuración autoriza la visión en esa aula (queda como "autorizada_por")
+POST {{api}}/api/admin/estaciones/2/configuration
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "tipoPunto": "AULA", "aulaId": 1, "etiquetaPunto": "Camara 3C", "expiracionSelectorS": 15,
+  "motivoCambio": "Piloto de vision autorizado por direccion (acta 01-2026)",
+  "permiteAsistencia": false, "permiteMovimientos": false }
+
+### Clave de la cámara -> dispositivos/vision/config_local.py (ESTACION_CLAVE)
+POST {{api}}/api/admin/estaciones/2/secret
+Authorization: Bearer {{token}}
+
+
+### ---------------------------------------------------------------------
+### 6. Comprobar como si fuera la estación (pegar id y clave)
+### ---------------------------------------------------------------------
+@estacionId = 1
+@estacionClave = PEGAR_AQUI_LA_CLAVE
+
+### Lo que la estación sabe de sí misma
+GET {{api}}/api/estacion/configuracion
+X-Estacion-Id: {{estacionId}}
+X-Estacion-Clave: {{estacionClave}}
+
+### Pasar una tarjeta (modo ASISTENCIA)
+POST {{api}}/api/estacion/lectura
+X-Estacion-Id: {{estacionId}}
+X-Estacion-Clave: {{estacionClave}}
+Content-Type: application/json
+
+{ "referenciaNfc": "53C22C21430001", "modo": "ASISTENCIA" }
+
+### Estado de las estaciones (última comunicación y modo)
+GET {{api}}/api/admin/estaciones
+Authorization: Bearer {{token}}

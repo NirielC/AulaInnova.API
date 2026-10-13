@@ -1,0 +1,21 @@
+# Fotos y datos de estudiantes: NUNCA a GitHub
+dataset/
+referencia.jpg
+dataset_yolo.zip
+
+# Modelos y resultados de entrenamiento (pesados)
+models/
+*.pt
+*.onnx
+runs/
+
+# Estado local
+estado.json
+pendientes.jsonl
+
+# Python
+__pycache__/
+.venv/
+
+# Datos de la instalación (clave de la cámara)
+config_local.py
