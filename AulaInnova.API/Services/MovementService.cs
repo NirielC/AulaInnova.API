@@ -1,14 +1,23 @@
-﻿using AulaInnova.API.Data;
+using AulaInnova.API.Data;
 using AulaInnova.API.DTOs.Movements;
 using AulaInnova.API.Models;
+using AulaInnova.API.Services.Exceptions;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace AulaInnova.API.Services;
 
+/// <summary>
+/// Salidas temporales del aula (baño, clínica...) y regresos, leídos por
+/// una estación en modo MOVIMIENTOS. Cada regla que no se cumple lanza
+/// RechazoEstacionException con un código para la pantalla de la estación.
+/// </summary>
 public class MovementService
 {
+    // Tiempo de referencia para considerar "vencida" una salida
+    // (salida_temporal.expira_utc). La salida sigue ABIERTA hasta que el
+    // estudiante regrese; si la jornada termina sin regreso, pasa a EXPIRADA.
+    private static readonly TimeSpan DuracionMaximaSalida = TimeSpan.FromMinutes(15);
+
     private readonly AulaInnovaDbContext _context;
 
     public MovementService(AulaInnovaDbContext context)
@@ -16,144 +25,79 @@ public class MovementService
         _context = context;
     }
 
-    public async Task<MovementResponse?> RegisterExitAsync(
+    public async Task<MovementResponse> RegisterExitAsync(
         MovementExitRequest request)
     {
-        var utcNow = request.OcurridoUtc ?? DateTime.UtcNow;
+        var (seleccionId, seleccionEdadMs) = EstacionReglas.Seleccion(
+            request.SeleccionId, request.SeleccionEdadMs);
 
-        // 1. Validar estación habilitada
-        var estacion = await _context.Estaciones
-            .FirstOrDefaultAsync(e =>
-                e.Id == request.EstacionId &&
-                e.Habilitada);
+        var repetida = await RespuestaRepetidaAsync(
+            request.EstacionId, seleccionId, "SALIDA_AULA");
 
-        if (estacion is null)
-            return null;
+        if (repetida is not null)
+            return repetida;
 
-        // 2. Buscar configuración vigente
-        var configuracion = await _context.EstacionesConfiguracion
-            .FirstOrDefaultAsync(c =>
-                c.EstacionId == estacion.Id &&
-                c.VigenteDesdeUtc <= utcNow &&
-                (c.VigenteHastaUtc == null ||
-                 c.VigenteHastaUtc >= utcNow));
+        var utcNow = EstacionReglas.HoraDeLectura(request.OcurridoUtc);
 
-        if (configuracion is null)
-            return null;
+        var configuracion = await EstacionReglas.ConfiguracionVigenteAsync(
+            _context, request.EstacionId, utcNow);
 
-        // 3. Confirmar operación SALIDA_AULA
-        var operacion = await _context.EstacionesOperaciones
-            .FirstOrDefaultAsync(o =>
-                o.EstacionConfiguracionId == configuracion.Id &&
-                o.Accion == "SALIDA_AULA" &&
-                o.ModoInterfaz == "MOVIMIENTOS");
+        await EstacionReglas.ExigirOperacionAsync(
+            _context, configuracion.Id, "SALIDA_AULA");
 
-        if (operacion is null)
-            return null;
-
-        // 4. La salida debe estar asociada a un aula
         if (configuracion.AulaId is null)
-            return null;
+            throw new RechazoEstacionException(
+                "ESTACION_SIN_AULA",
+                "Las salidas solo se registran en una estación de aula.");
 
-        // 5. Validar motivo de salida
         var motivo = await _context.MotivosSalida
             .FirstOrDefaultAsync(m =>
                 m.Codigo == request.MotivoCodigo &&
                 m.Habilitado);
 
         if (motivo is null)
-            return null;
+            throw new RechazoEstacionException(
+                "MOTIVO_INVALIDO",
+                "El motivo de salida no existe o está deshabilitado.");
 
-        // 6. Buscar credencial NFC válida
-        var credencial = await _context.CredencialesNfc
-            .Include(c => c.Persona)
-            .FirstOrDefaultAsync(c =>
-                c.Referencia == request.ReferenciaNfc &&
-                c.Activa &&
-                c.DesdeUtc <= utcNow &&
-                (c.HastaUtc == null || c.HastaUtc >= utcNow));
+        var credencial = await EstacionReglas.CredencialAsync(
+            _context, request.ReferenciaNfc, utcNow);
 
-        if (credencial is null)
-            return null;
+        var estudiante = await EstacionReglas.EstudianteAsync(
+            _context, credencial.PersonaId);
 
-        // 7. Validar persona
-        var persona = credencial.Persona;
+        var jornada = await EstacionReglas.JornadaObligatoriaAsync(
+            _context, utcNow);
 
-        if (persona is null || !persona.Habilitada)
-            return null;
+        var matricula = await EstacionReglas.MatriculaAsync(
+            _context, estudiante.PersonaId, jornada);
 
-        // 8. Confirmar estudiante
-        var estudiante = await _context.Estudiantes
-            .FirstOrDefaultAsync(e =>
-                e.PersonaId == persona.Id);
+        await ExpirarSalidasDeJornadasTerminadasAsync(
+            estudiante.PersonaId, utcNow);
 
-        if (estudiante is null)
-            return null;
-
-        // 9. Buscar matrícula vigente
-        var fechaActual = DateOnly.FromDateTime(utcNow);
-
-        var matricula = await _context.Matriculas
-            .FirstOrDefaultAsync(m =>
-                m.EstudianteId == estudiante.PersonaId &&
-                !m.Anulada &&
-                m.Desde <= fechaActual &&
-                (m.Hasta == null || m.Hasta >= fechaActual));
-
-        if (matricula is null)
-            return null;
-
-        // 10. Buscar jornada actual
-        var jornada = await _context.Jornadas
-            .FirstOrDefaultAsync(j =>
-                j.InicioUtc <= utcNow &&
-                j.FinUtc >= utcNow &&
-                j.Estado == "ABIERTA");
-
-        if (jornada is null)
-            return null;
-
-        // 11. Verificar que no exista otra salida abierta
         var salidaAbierta = await _context.SalidasTemporales
-            .FirstOrDefaultAsync(s =>
+            .AnyAsync(s =>
                 s.EstudianteId == estudiante.PersonaId &&
+                s.JornadaId == jornada.Id &&
                 s.Estado == "ABIERTA");
 
-        if (salidaAbierta is not null)
-            return null;
+        if (salidaAbierta)
+            throw new RechazoEstacionException(
+                "SALIDA_YA_ABIERTA",
+                "El estudiante ya está fuera: primero debe registrar su regreso.");
 
-        // 12. Calidad de hora
-        var calidadHora = request.OcurridoUtc.HasValue
-            ? "DECLARADA"
-            : "FIABLE";
-
-        // 13. Calcular expiración
-        DateTime? expiraUtc = null;
-
-        if (configuracion.ExpiracionSelectorS > 0)
-        {
-            expiraUtc = utcNow.AddSeconds(
-                configuracion.ExpiracionSelectorS);
-        }
-
-        // 14. Crear evento de salida
-        var eventoId = Guid.NewGuid();
-
-        var contenidoHash =
-            $"{request.ReferenciaNfc}|{request.EstacionId}|SALIDA_AULA|{utcNow:O}";
-
-        var hashSolicitud = SHA256.HashData(
-            Encoding.UTF8.GetBytes(contenidoHash));
+        var calidadHora = EstacionReglas.CalidadHora(request.OcurridoUtc);
 
         var evento = new Evento
         {
-            Id = eventoId,
-            HashSolicitud = hashSolicitud,
+            Id = Guid.NewGuid(),
+            HashSolicitud = EstacionReglas.Hash(
+                $"{credencial.Referencia}|{request.EstacionId}|SALIDA_AULA|{utcNow:O}"),
             Origen = "ESTACION",
             Accion = "SALIDA_AULA",
-            PersonaId = persona.Id,
+            PersonaId = estudiante.PersonaId,
             CredencialId = credencial.Id,
-            EstacionId = estacion.Id,
+            EstacionId = request.EstacionId,
             EstacionConfiguracionId = configuracion.Id,
             AulaId = configuracion.AulaId,
             JornadaId = jornada.Id,
@@ -163,12 +107,15 @@ public class MovementService
             RecibidoUtc = DateTime.UtcNow,
             CalidadHora = calidadHora,
             Estado = "ACEPTADO",
-            CodigoResultado = "SALIDA_REGISTRADA"
+            CodigoResultado = "SALIDA_REGISTRADA",
+            // CK_evento_seleccion_estacion: toda acción de estación que no
+            // sea ASISTENCIA lleva seleccion_id y seleccion_edad_ms.
+            SeleccionId = seleccionId,
+            SeleccionEdadMs = seleccionEdadMs
         };
 
         _context.Eventos.Add(evento);
 
-        // 15. Crear salida temporal
         var salida = new SalidaTemporal
         {
             EstudianteId = estudiante.PersonaId,
@@ -176,129 +123,102 @@ public class MovementService
             MatriculaId = matricula.Id,
             AulaId = configuracion.AulaId.Value,
             MotivoCodigo = motivo.Codigo,
-            EventoSalidaId = eventoId,
+            EventoSalidaId = evento.Id,
             SalidaUtc = utcNow,
-            ExpiraUtc = expiraUtc,
-            HorasFiables = calidadHora == "FIABLE",
+            ExpiraUtc = utcNow + DuracionMaximaSalida,
+            // CK_salida_temporal_horas_fiables: solo una salida CERRADA
+            // puede tener horas fiables; se decide al registrar el regreso.
+            HorasFiables = false,
             Estado = "ABIERTA",
             CreadoUtc = DateTime.UtcNow
         };
 
         _context.SalidasTemporales.Add(salida);
 
-        await _context.SaveChangesAsync();
-
-        return new MovementResponse
+        try
         {
-            SalidaTemporalId = salida.Id,
-            Accion = "SALIDA_AULA",
-            Estado = salida.Estado,
-            SalidaUtc = salida.SalidaUtc,
-            RegresoUtc = salida.RegresoUtc,
-            ExpiraUtc = salida.ExpiraUtc
-        };
+            await _context.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // La misma selección llegó dos veces a la vez
+            // (UX_evento_estacion_seleccion).
+            _context.ChangeTracker.Clear();
+
+            return await RespuestaRepetidaAsync(
+                       request.EstacionId, seleccionId, "SALIDA_AULA")
+                   ?? throw new InvalidOperationException(
+                       "No se pudo guardar la salida.");
+        }
+
+        return ToResponse(salida, "SALIDA_AULA", repetida: false);
     }
 
-    public async Task<MovementResponse?> RegisterReturnAsync(
+    public async Task<MovementResponse> RegisterReturnAsync(
         MovementReturnRequest request)
     {
-        var utcNow = request.OcurridoUtc ?? DateTime.UtcNow;
+        var (seleccionId, seleccionEdadMs) = EstacionReglas.Seleccion(
+            request.SeleccionId, request.SeleccionEdadMs);
 
-        // 1. Validar estación habilitada
-        var estacion = await _context.Estaciones
-            .FirstOrDefaultAsync(e =>
-                e.Id == request.EstacionId &&
-                e.Habilitada);
+        var repetida = await RespuestaRepetidaAsync(
+            request.EstacionId, seleccionId, "REGRESO_AULA");
 
-        if (estacion is null)
-            return null;
+        if (repetida is not null)
+            return repetida;
 
-        // 2. Buscar configuración vigente
-        var configuracion = await _context.EstacionesConfiguracion
-            .FirstOrDefaultAsync(c =>
-                c.EstacionId == estacion.Id &&
-                c.VigenteDesdeUtc <= utcNow &&
-                (c.VigenteHastaUtc == null ||
-                 c.VigenteHastaUtc >= utcNow));
+        var utcNow = EstacionReglas.HoraDeLectura(request.OcurridoUtc);
 
-        if (configuracion is null)
-            return null;
+        var configuracion = await EstacionReglas.ConfiguracionVigenteAsync(
+            _context, request.EstacionId, utcNow);
 
-        // 3. Confirmar operación REGRESO_AULA
-        var operacion = await _context.EstacionesOperaciones
-            .FirstOrDefaultAsync(o =>
-                o.EstacionConfiguracionId == configuracion.Id &&
-                o.Accion == "REGRESO_AULA" &&
-                o.ModoInterfaz == "MOVIMIENTOS");
+        await EstacionReglas.ExigirOperacionAsync(
+            _context, configuracion.Id, "REGRESO_AULA");
 
-        if (operacion is null)
-            return null;
+        var credencial = await EstacionReglas.CredencialAsync(
+            _context, request.ReferenciaNfc, utcNow);
 
-        // 4. Buscar credencial NFC válida
-        var credencial = await _context.CredencialesNfc
-            .Include(c => c.Persona)
-            .FirstOrDefaultAsync(c =>
-                c.Referencia == request.ReferenciaNfc &&
-                c.Activa &&
-                c.DesdeUtc <= utcNow &&
-                (c.HastaUtc == null || c.HastaUtc >= utcNow));
+        var estudiante = await EstacionReglas.EstudianteAsync(
+            _context, credencial.PersonaId);
 
-        if (credencial is null)
-            return null;
+        var jornada = await EstacionReglas.JornadaObligatoriaAsync(
+            _context, utcNow);
 
-        // 5. Validar persona
-        var persona = credencial.Persona;
+        await ExpirarSalidasDeJornadasTerminadasAsync(
+            estudiante.PersonaId, utcNow);
 
-        if (persona is null || !persona.Habilitada)
-            return null;
-
-        // 6. Confirmar estudiante
-        var estudiante = await _context.Estudiantes
-            .FirstOrDefaultAsync(e =>
-                e.PersonaId == persona.Id);
-
-        if (estudiante is null)
-            return null;
-
-        // 7. Buscar salida abierta
         var salida = await _context.SalidasTemporales
-            .FirstOrDefaultAsync(s =>
+            .Where(s =>
                 s.EstudianteId == estudiante.PersonaId &&
-                s.Estado == "ABIERTA");
+                s.JornadaId == jornada.Id &&
+                s.Estado == "ABIERTA")
+            .OrderByDescending(s => s.SalidaUtc)
+            .FirstOrDefaultAsync();
 
         if (salida is null)
-            return null;
+            throw new RechazoEstacionException(
+                "SIN_SALIDA_ABIERTA",
+                "El estudiante no tiene una salida abierta.");
 
-        // 8. Validar que el regreso no sea anterior a la salida
         if (salida.SalidaUtc.HasValue &&
             utcNow < salida.SalidaUtc.Value)
         {
-            return null;
+            throw new RechazoEstacionException(
+                "REGRESO_ANTES_DE_SALIDA",
+                "La hora del regreso es anterior a la de la salida.");
         }
 
-        // 9. Calidad de hora del regreso
-        var calidadHora = request.OcurridoUtc.HasValue
-            ? "DECLARADA"
-            : "FIABLE";
-
-        // 10. Crear evento de regreso
-        var eventoId = Guid.NewGuid();
-
-        var contenidoHash =
-            $"{request.ReferenciaNfc}|{request.EstacionId}|REGRESO_AULA|{utcNow:O}";
-
-        var hashSolicitud = SHA256.HashData(
-            Encoding.UTF8.GetBytes(contenidoHash));
+        var calidadHora = EstacionReglas.CalidadHora(request.OcurridoUtc);
 
         var evento = new Evento
         {
-            Id = eventoId,
-            HashSolicitud = hashSolicitud,
+            Id = Guid.NewGuid(),
+            HashSolicitud = EstacionReglas.Hash(
+                $"{credencial.Referencia}|{request.EstacionId}|REGRESO_AULA|{utcNow:O}"),
             Origen = "ESTACION",
             Accion = "REGRESO_AULA",
-            PersonaId = persona.Id,
+            PersonaId = estudiante.PersonaId,
             CredencialId = credencial.Id,
-            EstacionId = estacion.Id,
+            EstacionId = request.EstacionId,
             EstacionConfiguracionId = configuracion.Id,
             AulaId = salida.AulaId,
             JornadaId = salida.JornadaId,
@@ -307,31 +227,115 @@ public class MovementService
             RecibidoUtc = DateTime.UtcNow,
             CalidadHora = calidadHora,
             Estado = "ACEPTADO",
-            CodigoResultado = "REGRESO_REGISTRADO"
+            CodigoResultado = "REGRESO_REGISTRADO",
+            SeleccionId = seleccionId,
+            SeleccionEdadMs = seleccionEdadMs
         };
 
         _context.Eventos.Add(evento);
 
-        // 11. Cerrar salida temporal
-        salida.EventoRegresoId = eventoId;
+        // La duración fuera del aula solo es fiable si la salida y el
+        // regreso tienen la hora del servidor (no registros offline).
+        var salidaFiable = await _context.Eventos
+            .Where(e => e.Id == salida.EventoSalidaId)
+            .Select(e => e.CalidadHora)
+            .FirstOrDefaultAsync() == "FIABLE";
+
+        salida.EventoRegresoId = evento.Id;
         salida.RegresoUtc = utcNow;
         salida.Estado = "CERRADA";
+        salida.HorasFiables = salidaFiable && calidadHora == "FIABLE";
 
-        salida.HorasFiables =
-            salida.HorasFiables &&
-            calidadHora == "FIABLE";
+        try
+        {
+            await _context.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            _context.ChangeTracker.Clear();
 
-        // 12. Guardar
-        await _context.SaveChangesAsync();
+            return await RespuestaRepetidaAsync(
+                       request.EstacionId, seleccionId, "REGRESO_AULA")
+                   ?? throw new InvalidOperationException(
+                       "No se pudo guardar el regreso.");
+        }
 
+        return ToResponse(salida, "REGRESO_AULA", repetida: false);
+    }
+
+    /// <summary>
+    /// Si la estación reenvía una selección que ya se guardó (cola
+    /// offline, o se cortó la red justo después de guardar), devuelve el
+    /// resultado original en vez de rechazarla o duplicarla.
+    /// </summary>
+    private async Task<MovementResponse?> RespuestaRepetidaAsync(
+        long estacionId,
+        Guid seleccionId,
+        string accion)
+    {
+        var evento = await EstacionReglas.EventoPorSeleccionAsync(
+            _context, estacionId, seleccionId);
+
+        if (evento is null)
+            return null;
+
+        var salida = evento.Accion == accion
+            ? await _context.SalidasTemporales
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s =>
+                    s.EventoSalidaId == evento.Id ||
+                    s.EventoRegresoId == evento.Id)
+            : null;
+
+        if (salida is null)
+            throw new RechazoEstacionException(
+                "SELECCION_REPETIDA",
+                "Ese seleccionId ya se usó para otra operación.");
+
+        return ToResponse(salida, accion, repetida: true);
+    }
+
+    /// <summary>
+    /// Una salida que quedó ABIERTA en una jornada que ya terminó no puede
+    /// cerrarse con un regreso de otro día: pasa a EXPIRADA para no
+    /// bloquear al estudiante (CK_salida_temporal_estado_contexto exige
+    /// expira_utc en ese estado).
+    /// </summary>
+    private async Task ExpirarSalidasDeJornadasTerminadasAsync(
+        long estudianteId,
+        DateTime utcNow)
+    {
+        var vencidas = await _context.SalidasTemporales
+            .Where(s =>
+                s.EstudianteId == estudianteId &&
+                s.Estado == "ABIERTA" &&
+                _context.Jornadas.Any(j =>
+                    j.Id == s.JornadaId &&
+                    j.FinUtc < utcNow))
+            .ToListAsync();
+
+        foreach (var salida in vencidas)
+        {
+            salida.Estado = "EXPIRADA";
+            salida.ExpiraUtc ??= salida.SalidaUtc ?? salida.CreadoUtc;
+        }
+    }
+
+    private static MovementResponse ToResponse(
+        SalidaTemporal salida,
+        string accion,
+        bool repetida)
+    {
         return new MovementResponse
         {
             SalidaTemporalId = salida.Id,
-            Accion = "REGRESO_AULA",
+            Accion = accion,
             Estado = salida.Estado,
+            MotivoCodigo = salida.MotivoCodigo,
             SalidaUtc = salida.SalidaUtc,
             RegresoUtc = salida.RegresoUtc,
-            ExpiraUtc = salida.ExpiraUtc
+            ExpiraUtc = salida.ExpiraUtc,
+            Repetida = repetida
         };
     }
 }

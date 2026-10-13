@@ -1,4 +1,5 @@
-﻿using AulaInnova.API.DTOs.Visual;
+﻿using AulaInnova.API.Authentication;
+using AulaInnova.API.DTOs.Visual;
 using AulaInnova.API.Services;
 using AulaInnova.API.Services.Exceptions;
 using Microsoft.AspNetCore.Authorization;
@@ -127,13 +128,24 @@ public class VisualController : ControllerBase
     public async Task<IActionResult> RecordMeasurement(
         RecordVisualMeasurementRequest request)
     {
-        var result =
-            await _visualService.RecordMeasurementAsync(request);
+        try
+        {
+            var result =
+                await _visualService.RecordMeasurementAsync(
+                    request,
+                    User.EstacionId());
 
-        if (result is null)
-            return BadRequest();
+            if (result is null)
+                return BadRequest();
 
-        return Ok(result);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            // 403 (no 400): la cámara conserva la medición en su cola
+            // hasta que se corrija la configuración de la estación.
+            return StatusCode(403, new { mensaje = ex.Message });
+        }
     }
 
     [Authorize]

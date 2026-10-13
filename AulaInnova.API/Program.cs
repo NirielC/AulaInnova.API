@@ -96,6 +96,8 @@ builder.Services.AddScoped<AdminClassroomService>();
 builder.Services.AddScoped<AdminGroupService>();
 builder.Services.AddScoped<AdminSubjectService>();
 builder.Services.AddScoped<AdminJornadaService>();
+builder.Services.AddScoped<AsignacionGeneradorService>();
+builder.Services.AddScoped<EstacionService>();
 builder.Services.AddScoped<AdminHorarioService>();
 builder.Services.AddScoped<AdminMatriculaService>();
 builder.Services.AddScoped<AdminAsignacionService>();

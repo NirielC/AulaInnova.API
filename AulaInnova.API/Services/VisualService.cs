@@ -392,8 +392,17 @@ public class VisualService
         };
     }
 
+    /// <summary>
+    /// Medición agregada que envía la cámara (una estación). Solo la
+    /// estación configurada en el aula de la sesión puede enviarla
+    /// (si no, UnauthorizedAccessException -> 403). Se acepta también en
+    /// una sesión ya CERRADA si la ventana cae antes de su fin: así las
+    /// mediciones que la cámara guardó sin red no se pierden cuando la
+    /// clase termina.
+    /// </summary>
     public async Task<VisualResponse?> RecordMeasurementAsync(
-        RecordVisualMeasurementRequest request)
+        RecordVisualMeasurementRequest request,
+        long estacionId)
     {
         if (!IsUtc(request.InicioUtc) ||
             !IsUtc(request.FinUtc))
@@ -413,10 +422,27 @@ public class VisualService
         var session = await _context.SesionesVisuales
             .FirstOrDefaultAsync(s =>
                 s.Id == request.SesionId &&
-                s.Estado == "ACTIVA");
+                (s.Estado == "ACTIVA" || s.Estado == "CERRADA"));
 
         if (session is null)
             return null;
+
+        var utcNow = DateTime.UtcNow;
+
+        var aulaDeLaEstacion = await _context.EstacionesConfiguracion
+            .Where(c =>
+                c.EstacionId == estacionId &&
+                c.VigenteDesdeUtc <= utcNow &&
+                (c.VigenteHastaUtc == null ||
+                 c.VigenteHastaUtc > utcNow))
+            .Select(c => c.AulaId)
+            .FirstOrDefaultAsync();
+
+        if (aulaDeLaEstacion != session.AulaId)
+        {
+            throw new UnauthorizedAccessException(
+                "Esta estación no está configurada en el aula de la sesión.");
+        }
 
         if (request.InicioUtc < session.InicioUtc ||
             request.FinUtc > DateTime.UtcNow ||

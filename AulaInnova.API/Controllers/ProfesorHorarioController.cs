@@ -1,4 +1,4 @@
-using AulaInnova.API.Data;
+﻿using AulaInnova.API.Data;
 using AulaInnova.API.DTOs.Profesor;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -20,15 +20,16 @@ public class ProfesorHorarioController : ControllerBase
     }
 
     // Horario semanal vigente del profesor que inició sesión.
-    // ?dia=0..6 filtra un solo día (mismo valor que HorarioClase.DiaSemana).
+    // ?dia=1..7 filtra un solo día (1 = lunes ... 7 = domingo, igual que
+    // ai.horario_clase.dia_semana, CK_horario_clase_dia).
     [HttpGet]
     public async Task<ActionResult<List<HorarioProfesorResponse>>> GetMiHorario(
         [FromQuery] byte? dia)
     {
-        if (dia.HasValue && dia.Value > 6)
+        if (dia.HasValue && (dia.Value < 1 || dia.Value > 7))
             return BadRequest(new
             {
-                mensaje = "dia debe estar entre 0 y 6."
+                mensaje = "dia debe estar entre 1 (lunes) y 7 (domingo)."
             });
 
         if (!Guid.TryParse(

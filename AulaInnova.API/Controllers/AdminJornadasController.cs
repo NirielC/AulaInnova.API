@@ -108,4 +108,36 @@ public class AdminJornadasController : ControllerBase
             return Conflict(new { mensaje = ex.Message });
         }
     }
+
+    // Crea las jornadas de un periodo (p. ej. todo el mes, lunes a
+    // viernes) y sus clases a partir del horario semanal.
+    [HttpPost("rango")]
+    public async Task<ActionResult<GeneracionJornadasResponse>> CreateRange(
+        CreateJornadasRangoRequest request)
+    {
+        try
+        {
+            return Ok(await _service.CreateRangeAsync(request, User));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { mensaje = ex.Message });
+        }
+    }
+
+    // Vuelve a generar las clases (asignaciones) de la jornada desde el
+    // horario. Solo agrega las que falten; no toca las existentes.
+    [HttpPost("{id:long}/asignaciones")]
+    public async Task<ActionResult<ResultadoGeneracion>> GenerateAssignments(
+        long id)
+    {
+        try
+        {
+            return Ok(await _service.GenerateAssignmentsAsync(id));
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { mensaje = ex.Message });
+        }
+    }
 }

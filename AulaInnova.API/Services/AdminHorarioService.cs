@@ -328,15 +328,15 @@ public class AdminHorarioService
         TimeOnly horaInicio,
         TimeOnly horaFin)
     {
-        if (diaSemana > 6)
+        if (diaSemana < 1 || diaSemana > 7)
             throw new ArgumentException(
-                "DiaSemana debe estar entre 0 y 6.");
+                "DiaSemana debe estar entre 1 (lunes) y 7 (domingo).");
 
         if (vigenteHasta.HasValue &&
-            vigenteHasta.Value < vigenteDesde)
+            vigenteHasta.Value <= vigenteDesde)
         {
             throw new ArgumentException(
-                "VigenteHasta no puede ser anterior a VigenteDesde.");
+                "VigenteHasta debe ser posterior a VigenteDesde.");
         }
 
         if (horaFin <= horaInicio)

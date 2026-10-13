@@ -1,5 +1,7 @@
-﻿using AulaInnova.API.DTOs.Attendance;
+﻿using AulaInnova.API.Authentication;
+using AulaInnova.API.DTOs.Attendance;
 using AulaInnova.API.Services;
+using AulaInnova.API.Services.Exceptions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -18,22 +20,23 @@ public class AttendanceController : ControllerBase
 
     // Lo llama la estación NFC, no una persona: solo su propio secreto
     // (ai.estacion_secreto) autentica esta ruta.
+    // 200 = registrada (o ya lo estaba: yaRegistrada = true).
+    // 400 = { codigo, mensaje }: la estación muestra el motivo y NO reintenta.
     [Authorize(AuthenticationSchemes = "Estacion")]
     [HttpPost]
     public async Task<ActionResult<AttendanceResponse>> Register(
         AttendanceRequest request)
     {
-        var response = await _attendanceService.RegisterAsync(request);
+        request.EstacionId = User.EstacionId();
 
-        if (response is null)
+        try
         {
-            return BadRequest(new
-            {
-                mensaje = "No se pudo registrar la asistencia."
-            });
+            return Ok(await _attendanceService.RegisterAsync(request));
         }
-
-        return Ok(response);
+        catch (RechazoEstacionException ex)
+        {
+            return BadRequest(new { codigo = ex.Codigo, mensaje = ex.Message });
+        }
     }
 
     // Lo hace un operador humano (docente/administrativo) con permiso;

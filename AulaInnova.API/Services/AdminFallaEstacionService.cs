@@ -131,7 +131,7 @@ public class AdminFallaEstacionService
             falla.ResueltaUtc
         };
 
-        falla.Estado = "CERRADA";
+        falla.Estado = "RESUELTA";
         falla.ResueltaUtc = DateTime.UtcNow;
 
         _auditService.Registrar(

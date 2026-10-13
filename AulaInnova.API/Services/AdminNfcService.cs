@@ -38,7 +38,11 @@ public class AdminNfcService
             throw new ArgumentException(
                 "La persona no existe o está deshabilitada.");
 
-        var referencia = request.Referencia.Trim();
+        // CK_credencial_nfc_referencia: solo hexadecimal en MAYÚSCULAS.
+        // Se aceptan guiones o dos puntos (UUID v4, UID "04:A1:...") y se
+        // quitan, igual que hace la estación al leer la tarjeta.
+        var referencia = EstacionReglas.NormalizarReferenciaAdmin(
+            request.Referencia);
 
         var referenceExists = await _db.CredencialesNfc
             .AnyAsync(c => c.Referencia == referencia);

@@ -1,5 +1,7 @@
-﻿using AulaInnova.API.DTOs.Movements;
+﻿using AulaInnova.API.Authentication;
+using AulaInnova.API.DTOs.Movements;
 using AulaInnova.API.Services;
+using AulaInnova.API.Services.Exceptions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -8,6 +10,8 @@ namespace AulaInnova.API.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 // Ambas rutas las llama la estación NFC de movimientos, no una persona.
+// 200 = registrado (repetida = true si era un reenvío de la cola offline).
+// 400 = { codigo, mensaje }: la estación muestra el motivo y NO reintenta.
 [Authorize(AuthenticationSchemes = "Estacion")]
 public class MovementController : ControllerBase
 {
@@ -22,35 +26,31 @@ public class MovementController : ControllerBase
     public async Task<ActionResult<MovementResponse>> RegisterExit(
         MovementExitRequest request)
     {
-        var response =
-            await _movementService.RegisterExitAsync(request);
+        request.EstacionId = User.EstacionId();
 
-        if (response is null)
+        try
         {
-            return BadRequest(new
-            {
-                mensaje = "No se pudo registrar la salida."
-            });
+            return Ok(await _movementService.RegisterExitAsync(request));
         }
-
-        return Ok(response);
+        catch (RechazoEstacionException ex)
+        {
+            return BadRequest(new { codigo = ex.Codigo, mensaje = ex.Message });
+        }
     }
 
     [HttpPost("return")]
     public async Task<ActionResult<MovementResponse>> RegisterReturn(
         MovementReturnRequest request)
     {
-        var response =
-            await _movementService.RegisterReturnAsync(request);
+        request.EstacionId = User.EstacionId();
 
-        if (response is null)
+        try
         {
-            return BadRequest(new
-            {
-                mensaje = "No se pudo registrar el regreso."
-            });
+            return Ok(await _movementService.RegisterReturnAsync(request));
         }
-
-        return Ok(response);
+        catch (RechazoEstacionException ex)
+        {
+            return BadRequest(new { codigo = ex.Codigo, mensaje = ex.Message });
+        }
     }
 }

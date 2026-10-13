@@ -326,7 +326,7 @@ public class AdminAsignacionService
         {
             "ACTIVA",
             "CANCELADA",
-            "FINALIZADA"
+            "SUSTITUIDA"
         };
 
         if (!estadosPermitidos.Contains(estado))
@@ -394,6 +394,15 @@ public class AdminAsignacionService
         if (string.IsNullOrWhiteSpace(tipo))
             throw new ArgumentException(
                 "El tipo de asignación es obligatorio.");
+
+        // CK_asignacion_tipo admite CLASE, CUIDO y SUSTITUCION, pero una
+        // SUSTITUCION exige sustituye_id (CK_asignacion_sustitucion) y este
+        // endpoint no lo recibe: aquí solo se crean CLASE y CUIDO.
+        var tipoNormalizado = tipo.Trim().ToUpperInvariant();
+
+        if (tipoNormalizado != "CLASE" && tipoNormalizado != "CUIDO")
+            throw new ArgumentException(
+                "El tipo de asignación debe ser CLASE o CUIDO.");
 
         if (inicioUtc.Kind != DateTimeKind.Utc ||
             finUtc.Kind != DateTimeKind.Utc)

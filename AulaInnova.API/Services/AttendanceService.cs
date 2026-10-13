@@ -21,108 +21,43 @@ public class AttendanceService
         _authorizationService = authorizationService;
     }
 
-    public async Task<AttendanceResponse?> RegisterAsync(
+    /// <summary>
+    /// Asistencia leída por una estación en modo ASISTENCIA.
+    /// Si algo no se cumple lanza RechazoEstacionException con un código
+    /// (CREDENCIAL_NO_REGISTRADA, NO_ES_ESTUDIANTE, SIN_JORNADA...).
+    /// Pasar la tarjeta dos veces el mismo día no duplica: devuelve la
+    /// asistencia existente con YaRegistrada = true.
+    /// </summary>
+    public async Task<AttendanceResponse> RegisterAsync(
         AttendanceRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.ReferenciaNfc))
-            return null;
+        var ocurridoUtc = EstacionReglas.HoraDeLectura(request.OcurridoUtc);
 
-        if (request.EstacionId <= 0)
-            return null;
+        var configuracion = await EstacionReglas.ConfiguracionVigenteAsync(
+            _db, request.EstacionId, ocurridoUtc);
 
-        var ocurridoUtc = request.OcurridoUtc ?? DateTime.UtcNow;
+        await EstacionReglas.ExigirOperacionAsync(
+            _db, configuracion.Id, "ASISTENCIA");
 
-        if (ocurridoUtc.Kind != DateTimeKind.Utc)
-            return null;
+        var credencial = await EstacionReglas.CredencialAsync(
+            _db, request.ReferenciaNfc, ocurridoUtc);
 
-        var estacion = await _db.Estaciones
-            .FirstOrDefaultAsync(e =>
-                e.Id == request.EstacionId &&
-                e.Habilitada);
+        var estudiante = await EstacionReglas.EstudianteAsync(
+            _db, credencial.PersonaId);
 
-        if (estacion is null)
-            return null;
+        var jornada = await EstacionReglas.JornadaObligatoriaAsync(
+            _db, ocurridoUtc);
 
-        var configuracion = await _db.EstacionesConfiguracion
-            .FirstOrDefaultAsync(c =>
-                c.EstacionId == estacion.Id &&
-                c.VigenteDesdeUtc <= ocurridoUtc &&
-                (c.VigenteHastaUtc == null ||
-                 c.VigenteHastaUtc > ocurridoUtc));
+        var matricula = await EstacionReglas.MatriculaAsync(
+            _db, estudiante.PersonaId, jornada);
 
-        if (configuracion is null)
-            return null;
-
-        var operacion = await _db.EstacionesOperaciones
-            .FirstOrDefaultAsync(o =>
-                o.EstacionConfiguracionId == configuracion.Id &&
-                o.Accion == "ASISTENCIA" &&
-                o.ModoInterfaz == "ASISTENCIA");
-
-        if (operacion is null)
-            return null;
-
-        var credencial = await _db.CredencialesNfc
-            .Include(c => c.Persona)
-            .FirstOrDefaultAsync(c =>
-                c.Referencia == request.ReferenciaNfc.Trim() &&
-                c.Activa &&
-                c.DesdeUtc <= ocurridoUtc &&
-                (c.HastaUtc == null ||
-                 c.HastaUtc > ocurridoUtc));
-
-        if (credencial is null)
-            return null;
-
-        if (!credencial.Persona.Habilitada)
-            return null;
-
-        var estudiante = await _db.Estudiantes
-            .FirstOrDefaultAsync(e =>
-                e.PersonaId == credencial.PersonaId);
-
-        if (estudiante is null)
-            return null;
-
-        var jornada = await _db.Jornadas
-            .FirstOrDefaultAsync(j =>
-                j.InicioUtc <= ocurridoUtc &&
-                j.FinUtc >= ocurridoUtc &&
-                j.Estado != "CANCELADA");
-
-        if (jornada is null)
-            return null;
-
-        var matricula = await _db.Matriculas
-            .FirstOrDefaultAsync(m =>
-                m.EstudianteId == estudiante.PersonaId &&
-                !m.Anulada &&
-                m.Desde <= jornada.FechaLocal &&
-                (m.Hasta == null ||
-                 m.Hasta >= jornada.FechaLocal));
-
-        if (matricula is null)
-            return null;
-
-        var existing = await _db.Asistencias
-            .FirstOrDefaultAsync(a =>
-                a.EstudianteId == estudiante.PersonaId &&
-                a.JornadaId == jornada.Id);
+        var existing = await BuscarAsistenciaAsync(
+            estudiante.PersonaId, jornada.Id);
 
         if (existing is not null)
-        {
-            return new AttendanceResponse
-            {
-                AsistenciaId = existing.Id,
-                Estado = existing.Estado,
-                Puntualidad = existing.Puntualidad,
-                LlegadaUtc = existing.LlegadaUtc
-            };
-        }
+            return existing;
 
-        var calidadHora = request.OcurridoUtc.HasValue
-            ? "DECLARADA"
-            : "FIABLE";
+        var calidadHora = EstacionReglas.CalidadHora(request.OcurridoUtc);
 
         var puntualidad = calidadHora == "FIABLE"
             ? ocurridoUtc <= jornada.LimitePuntualUtc
@@ -133,14 +68,13 @@ public class AttendanceService
         var evento = new Evento
         {
             Id = Guid.NewGuid(),
-            HashSolicitud = SHA256.HashData(
-                Encoding.UTF8.GetBytes(
-                    $"{request.ReferenciaNfc}|{request.EstacionId}|{ocurridoUtc:O}")),
+            HashSolicitud = EstacionReglas.Hash(
+                $"{credencial.Referencia}|{request.EstacionId}|{ocurridoUtc:O}"),
             Origen = "ESTACION",
             Accion = "ASISTENCIA",
             PersonaId = estudiante.PersonaId,
             CredencialId = credencial.Id,
-            EstacionId = estacion.Id,
+            EstacionId = request.EstacionId,
             EstacionConfiguracionId = configuracion.Id,
             OperadorId = null,
             AulaId = configuracion.AulaId,
@@ -173,15 +107,51 @@ public class AttendanceService
         _db.Eventos.Add(evento);
         _db.Asistencias.Add(asistencia);
 
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Dos lecturas casi simultáneas (por ejemplo la cola offline y
+            // una lectura en vivo): UQ_asistencia_estudiante_jornada deja
+            // pasar solo una. La otra devuelve la que quedó guardada.
+            _db.ChangeTracker.Clear();
+
+            return await BuscarAsistenciaAsync(
+                       estudiante.PersonaId, jornada.Id)
+                   ?? throw new InvalidOperationException(
+                       "No se pudo guardar la asistencia.");
+        }
 
         return new AttendanceResponse
         {
             AsistenciaId = asistencia.Id,
             Estado = asistencia.Estado,
             Puntualidad = asistencia.Puntualidad,
-            LlegadaUtc = asistencia.LlegadaUtc
+            LlegadaUtc = asistencia.LlegadaUtc,
+            YaRegistrada = false
         };
+    }
+
+    private async Task<AttendanceResponse?> BuscarAsistenciaAsync(
+        long estudianteId,
+        long jornadaId)
+    {
+        return await _db.Asistencias
+            .AsNoTracking()
+            .Where(a =>
+                a.EstudianteId == estudianteId &&
+                a.JornadaId == jornadaId)
+            .Select(a => new AttendanceResponse
+            {
+                AsistenciaId = a.Id,
+                Estado = a.Estado,
+                Puntualidad = a.Puntualidad,
+                LlegadaUtc = a.LlegadaUtc,
+                YaRegistrada = true
+            })
+            .FirstOrDefaultAsync();
     }
 
     public async Task<ManualAttendanceResponse> RegisterManualAsync(

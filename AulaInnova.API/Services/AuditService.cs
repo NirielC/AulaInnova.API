@@ -63,7 +63,12 @@ public class AuditService
             ["CONFIGURAR"] = "CORREGIR",
             ["CONFIGURAR_MODO"] = "CORREGIR",
             ["ASIGNAR"] = "ACTIVAR",
-            ["ABRIR"] = "ACTIVAR"
+            ["ABRIR"] = "ACTIVAR",
+            ["HABILITAR"] = "ACTIVAR",
+            ["DESHABILITAR"] = "ANULAR",
+            ["DESACTIVAR"] = "ANULAR",
+            ["REACTIVAR"] = "REABRIR",
+            ["VERIFICAR"] = "CERRAR"
         };
 
     public void Registrar(

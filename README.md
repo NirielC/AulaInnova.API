@@ -2,7 +2,7 @@
 
 ## Requisitos
 
-- Visual Studio 2022 (con carga de trabajo "ASP.NET y desarrollo web") **o** .NET SDK 8/9 + terminal.
+- Visual Studio 2022 17.14+ (con carga de trabajo "ASP.NET y desarrollo web") **o** .NET SDK 10 + terminal (el proyecto es `net10.0`).
 - SQL Server 2022 (16.x) o superior. La opción más simple si no tienen uno propio:
   SQL Server LocalDB, que ya viene instalado con Visual Studio
   (`(localdb)\MSSQLLocalDB`). Verifiquen la versión con `SELECT @@VERSION;`
@@ -103,8 +103,17 @@ Desde Visual Studio: abran `AulaInnova.sln` y usen el botón verde (perfil
 dotnet run --project AulaInnova.API
 ```
 
-Swagger queda en `https://localhost:{puerto}/swagger` (el puerto exacto lo
-dice la consola al arrancar).
+Para que la **estación NFC y la cámara** la vean desde la red (no solo desde
+`localhost`):
+
+```
+dotnet run --project AulaInnova.API --urls http://0.0.0.0:5077
+```
+
+No hay Swagger UI: el documento OpenAPI queda en `/openapi/v1.json` (en
+Development). Para probar endpoints usen los archivos `.http`
+(`AulaInnova.API/AulaInnova.API.http` y `dispositivos/configurar_sistema.http`)
+con Visual Studio o VS Code.
 
 ### 7. Primer login
 
@@ -117,19 +126,52 @@ Password: Admin#2026!
 ```
 
 Con eso ya pueden pedir un token en `POST /api/Auth/login` y probar el resto
-de endpoints desde Swagger con el botón "Authorize".
+de endpoints con los archivos `.http`.
 
-## Nota sobre las estaciones NFC
+### 8. Permisos del administrador
 
-Los endpoints `POST /api/Attendance`, `POST /api/Movement/exit`,
-`POST /api/Movement/return` y `POST /api/Visual/measurements` no usan el
-login normal — los llama el dispositivo físico, autenticado con un secreto
-propio (`X-Estacion-Id` + `X-Estacion-Clave`). Para generar ese secreto,
-como administrador:
+Varios endpoints piden un permiso de `ai.concesion` (por ejemplo
+`VISION_CONFIGURAR` para zonas, indicadores y sesiones visuales). Con la API
+ya arrancada una vez (para que exista el usuario `admin`), corran:
+
+```
+sql/10_concesiones_administrador.sql
+```
+
+Da todos los permisos, con ámbito INSTITUCION, a cada usuario con rol
+Administrador. Se puede volver a correr cuando se cree otro administrador.
+
+### 9. Jornadas y clases
+
+La asistencia y la cámara necesitan una **jornada** por día y sus **clases**
+(asignaciones). No hace falta crearlas una por una:
+
+```
+POST /api/admin/jornadas/rango
+{ "desde": "2026-10-13", "hasta": "2026-11-30", "horaInicio": "06:30:00",
+  "horaFin": "17:00:00", "horaLimitePuntual": "07:00:00", "dias": [1,2,3,4,5] }
+```
+
+Crea las jornadas del periodo y, para cada día, las asignaciones tipo CLASE a
+partir del horario semanal (`dia_semana` 1 = lunes … 7 = domingo).
+
+## Estaciones NFC y cámara
+
+Firmware, módulo de visión, puesta en marcha y cómo viajan los datos hasta la
+base: carpeta [`dispositivos/`](dispositivos/README.md), en especial
+[`dispositivos/FLUJO_DE_DATOS.md`](dispositivos/FLUJO_DE_DATOS.md).
+
+Los endpoints que llaman los dispositivos (`/api/estacion/*`,
+`POST /api/Attendance`, `POST /api/Movement/exit|return`,
+`POST /api/Visual/measurements`) no usan el login normal: cada estación se
+autentica con su propio secreto (`X-Estacion-Id` + `X-Estacion-Clave`). Para
+generarlo, como administrador:
 
 ```
 POST /api/admin/estaciones/{id}/secret
 ```
 
 La respuesta trae el secreto en claro una sola vez — guárdenlo, no se puede
-volver a consultar.
+volver a consultar. Los errores de negocio vuelven como
+`400 { "codigo": "SIN_MATRICULA", "mensaje": "..." }` para que la estación
+muestre el motivo.

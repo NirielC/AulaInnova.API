@@ -68,7 +68,7 @@ public class IncidentService
             .FirstOrDefaultAsync(j =>
                 j.InicioUtc <= utcNow &&
                 j.FinUtc >= utcNow &&
-                j.Estado == "ABIERTA");
+                j.Estado != "CANCELADA");
 
         if (jornada is null)
             return null;

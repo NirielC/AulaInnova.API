@@ -11,11 +11,16 @@ public class AdminEstacionService
     private readonly AulaInnovaDbContext _db;
     private readonly AuditService _auditService;
 
+    // CK_estacion_configuracion_tipo_punto: AULA o ACCESO (entrada del
+    // colegio). "ENTRADA" se acepta como sinónimo de ACCESO.
     private static readonly string[] TiposPuntoPermitidos =
     {
-        "ENTRADA",
+        "ACCESO",
         "AULA"
     };
+
+    // CK_estacion_configuracion_expiracion: entre 3 y 60 segundos.
+    private const short ExpiracionSelectorPorDefecto = 15;
 
     private static readonly string[] ModosPermitidos =
     {
@@ -169,13 +174,20 @@ public class AdminEstacionService
             .Trim()
             .ToUpperInvariant();
 
+        if (tipoPunto == "ENTRADA")
+            tipoPunto = "ACCESO";
+
         if (!TiposPuntoPermitidos.Contains(tipoPunto))
             throw new ArgumentException(
-                "TipoPunto no válido.");
+                "TipoPunto no válido (AULA o ACCESO).");
 
-        if (request.ExpiracionSelectorS < 0)
+        var expiracionSelectorS = request.ExpiracionSelectorS == 0
+            ? ExpiracionSelectorPorDefecto
+            : request.ExpiracionSelectorS;
+
+        if (expiracionSelectorS < 3 || expiracionSelectorS > 60)
             throw new ArgumentException(
-                "ExpiracionSelectorS no puede ser negativa.");
+                "ExpiracionSelectorS debe estar entre 3 y 60 segundos.");
 
         var estacion = await _db.Estaciones
             .FirstOrDefaultAsync(e => e.Id == estacionId);
@@ -203,11 +215,11 @@ public class AdminEstacionService
                     "El aula no existe o está deshabilitada.");
         }
 
-        if (tipoPunto == "ENTRADA" &&
+        if (tipoPunto == "ACCESO" &&
             request.AulaId.HasValue)
         {
             throw new ArgumentException(
-                "Una estación de entrada no debe tener aula asignada.");
+                "Una estación de acceso no debe tener aula asignada.");
         }
 
         var now = DateTime.UtcNow;
@@ -221,6 +233,16 @@ public class AdminEstacionService
             .FirstOrDefaultAsync();
 
         object? antes = null;
+
+        // Si al reconfigurar no se indica ningún modo, se conservan las
+        // operaciones de la configuración anterior: si no, la estación
+        // quedaría sin poder registrar nada hasta llamar a /mode.
+        var accionesAnteriores = current is null
+            ? new List<string>()
+            : await _db.EstacionesOperaciones
+                .Where(o => o.EstacionConfiguracionId == current.Id)
+                .Select(o => o.Accion)
+                .ToListAsync();
 
         if (current is not null)
         {
@@ -247,13 +269,33 @@ public class AdminEstacionService
             TipoPunto = tipoPunto,
             AulaId = request.AulaId,
             EtiquetaPunto = request.EtiquetaPunto.Trim(),
-            ExpiracionSelectorS = request.ExpiracionSelectorS,
+            ExpiracionSelectorS = expiracionSelectorS,
             VigenteDesdeUtc = now,
             VigenteHastaUtc = null,
             ConfiguradaPor = usuarioId,
             MotivoCambio = request.MotivoCambio.Trim(),
             CreadoUtc = now
         };
+
+        var acciones = new List<string>();
+
+        if (request.PermiteAsistencia)
+            acciones.AddRange(AccionesDelModo("ASISTENCIA"));
+
+        if (request.PermiteMovimientos)
+            acciones.AddRange(AccionesDelModo("MOVIMIENTOS"));
+
+        if (acciones.Count == 0)
+            acciones.AddRange(accionesAnteriores);
+
+        foreach (var accion in acciones.Distinct())
+        {
+            configuration.Operaciones.Add(new EstacionOperacion
+            {
+                Accion = accion,
+                ModoInterfaz = ModoInterfazDe(accion)
+            });
+        }
 
         _db.EstacionesConfiguracion.Add(configuration);
 
@@ -341,61 +383,19 @@ public class AdminEstacionService
             throw new InvalidOperationException(
                 "La estación no tiene una configuración vigente.");
 
-        if (modo == "ASISTENCIA")
+        var existentes = await _db.EstacionesOperaciones
+            .Where(o => o.EstacionConfiguracionId == configuration.Id)
+            .Select(o => o.Accion)
+            .ToListAsync();
+
+        foreach (var accion in AccionesDelModo(modo).Except(existentes))
         {
-            var exists = await _db.EstacionesOperaciones
-                .AnyAsync(o =>
-                    o.EstacionConfiguracionId == configuration.Id &&
-                    o.Accion == "ASISTENCIA" &&
-                    o.ModoInterfaz == "ASISTENCIA");
-
-            if (!exists)
+            _db.EstacionesOperaciones.Add(new EstacionOperacion
             {
-                _db.EstacionesOperaciones.Add(
-                    new EstacionOperacion
-                    {
-                        EstacionConfiguracionId = configuration.Id,
-                        Accion = "ASISTENCIA",
-                        ModoInterfaz = "ASISTENCIA"
-                    });
-            }
-        }
-
-        if (modo == "MOVIMIENTOS")
-        {
-            var salidaExists = await _db.EstacionesOperaciones
-                .AnyAsync(o =>
-                    o.EstacionConfiguracionId == configuration.Id &&
-                    o.Accion == "SALIDA_AULA" &&
-                    o.ModoInterfaz == "MOVIMIENTOS");
-
-            if (!salidaExists)
-            {
-                _db.EstacionesOperaciones.Add(
-                    new EstacionOperacion
-                    {
-                        EstacionConfiguracionId = configuration.Id,
-                        Accion = "SALIDA_AULA",
-                        ModoInterfaz = "MOVIMIENTOS"
-                    });
-            }
-
-            var regresoExists = await _db.EstacionesOperaciones
-                .AnyAsync(o =>
-                    o.EstacionConfiguracionId == configuration.Id &&
-                    o.Accion == "REGRESO_AULA" &&
-                    o.ModoInterfaz == "MOVIMIENTOS");
-
-            if (!regresoExists)
-            {
-                _db.EstacionesOperaciones.Add(
-                    new EstacionOperacion
-                    {
-                        EstacionConfiguracionId = configuration.Id,
-                        Accion = "REGRESO_AULA",
-                        ModoInterfaz = "MOVIMIENTOS"
-                    });
-            }
+                EstacionConfiguracionId = configuration.Id,
+                Accion = accion,
+                ModoInterfaz = ModoInterfazDe(accion)
+            });
         }
 
         _auditService.Registrar(
@@ -567,4 +567,19 @@ public class AdminEstacionService
                 configuration.MotivoCambio
         };
     }
+
+    /// <summary>
+    /// Acciones (ai.estacion_operacion) que habilita cada modo. La
+    /// presencia del personal se habilita en los dos modos: un docente
+    /// marca su llegada aunque la estación esté en ASISTENCIA.
+    /// </summary>
+    private static string[] AccionesDelModo(string modo) =>
+        modo == "ASISTENCIA"
+            ? new[] { "ASISTENCIA", "LLEGADA_PERSONAL", "SALIDA_PERSONAL" }
+            : new[] { "SALIDA_AULA", "REGRESO_AULA", "LLEGADA_PERSONAL", "SALIDA_PERSONAL" };
+
+    // CK_estacion_operacion_coherencia: solo ASISTENCIA usa el modo de
+    // interfaz ASISTENCIA; todo lo demás se guarda como MOVIMIENTOS.
+    private static string ModoInterfazDe(string accion) =>
+        accion == "ASISTENCIA" ? "ASISTENCIA" : "MOVIMIENTOS";
 }
