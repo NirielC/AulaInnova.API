@@ -63,7 +63,7 @@ también en casa con alguna foto de prueba para que ya quede descargado.
 
 ### 4. Juntar el dataset (durante una clase real)
 `python tools/02_capturar_dataset.py --minutos 90`
-- 1 foto cada 5 s; descarta borrosas, oscuras y repetidas.
+- 1 foto cada 1.5 s, sin filtros (guarda todas). Cambiar con `--intervalo`.
 - Meta: **300-500 fotos**, de varias clases y horarios.
 
 ### 5. Etiquetar, revisar y entrenar

@@ -52,10 +52,9 @@ TAMANO_IMAGEN = 640     # imgsz de YOLO
 # ============================================================
 # CAPTURA DEL DATASET
 # ============================================================
-INTERVALO_CAPTURA_S = 5     # una foto cada 5 s
+INTERVALO_CAPTURA_S = 1.5   # una foto cada 1.5 s
 MIN_NITIDEZ = 60            # varianza del Laplaciano; menos = borrosa
 MIN_LUZ = 50                # brillo medio (0-255)
-MIN_CAMBIO = 6.0            # diferencia media con la última foto guardada (0-255)
 PORCENTAJE_VALIDACION = 0.15
 
 # ============================================================
