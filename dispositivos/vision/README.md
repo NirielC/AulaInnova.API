@@ -61,6 +61,12 @@ también en casa con alguna foto de prueba para que ya quede descargado.
 
 **El modelo base ya funciona desde el primer día.** Entrenar solo lo mejora.
 
+> **Modelo entrenado incluido:** `models/aulainnova_personas.pt` ya viene en el
+> repo (YOLO11s ajustado con 1814 fotos de dos salones del colegio, 14/10/2026;
+> mAP50 0.876 → 0.956 en validación). Al clonar, `08_detectar.py` lo usa solo.
+> Las fotos del dataset **no** están en GitHub (son de estudiantes): se comparten
+> aparte, solo con el equipo.
+
 ### 4. Juntar el dataset (durante una clase real)
 `python tools/02_capturar_dataset.py --minutos 90`
 - 1 foto cada 5 s; descarta borrosas, oscuras y repetidas.

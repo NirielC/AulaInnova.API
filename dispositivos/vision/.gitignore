@@ -4,10 +4,14 @@ referencia.jpg
 dataset_yolo.zip
 
 # Modelos y resultados de entrenamiento (pesados)
-models/
+# Solo se sube el modelo final (19 MB), para que funcione al clonar.
+models/*
 *.pt
+!models/aulainnova_personas.pt
 *.onnx
 runs/
+weights/
+*.log
 
 # Estado local
 estado.json
